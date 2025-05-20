@@ -1,0 +1,120 @@
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.0
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=lol
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - ./elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    expose:
+      - 9200
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.elasticsearch.rule=Host(`elakos.snaart.com`)"
+      - "traefik.http.routers.elasticsearch.entrypoints=websecure"
+      - "traefik.http.routers.elasticsearch.tls.certresolver=myresolver"
+      - "traefik.http.services.elasticsearch.loadbalancer.server.port=9200"
+    networks:
+      - elk
+      - traefik_network
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:7.17.0
+    container_name: logstash
+    volumes:
+      - ./logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+    expose:
+      - 5044
+      - 5000
+    environment:
+      - "LS_JAVA_OPTS=-Xms256m -Xmx256m"
+    depends_on:
+      - elasticsearch
+    networks:
+      - elk
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:7.17.0
+    container_name: kibana
+    volumes:
+      - ./kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml
+    expose:
+      - 5601
+    environment:
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=lol
+    depends_on:
+      - elasticsearch
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.kibana.rule=Host(`kibkos.snaart.com`)"
+      - "traefik.http.routers.kibana.entrypoints=websecure"
+      - "traefik.http.routers.kibana.tls.certresolver=myresolver"
+      - "traefik.http.services.kibana.loadbalancer.server.port=5601"
+    networks:
+      - elk
+      - traefik_network
+
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:7.17.0
+    container_name: filebeat
+    user: root
+    volumes:
+      - ./filebeat/config/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ./app/logs:/app/logs:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - ELASTICSEARCH_HOST=elasticsearch
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=lol
+    depends_on:
+      - elasticsearch
+      - logstash
+    networks:
+      - elk
+    command: ["--strict.perms=false"]
+
+  app:
+    build:
+      context: ./app
+    container_name: fastapi-app
+    volumes:
+      - ./app:/app
+      - ./app/logs:/app/logs
+    expose:
+      - 8000
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.worldstats.rule=Host(`apisteth.snaart.com`)"
+      - "traefik.http.routers.worldstats.entrypoints=websecure"
+      - "traefik.http.routers.worldstats.tls.certresolver=myresolver"
+      - "traefik.http.services.worldstats.loadbalancer.server.port=8000"
+    networks:
+      - elk
+      - traefik_network
+    depends_on:
+      - elasticsearch
+      - kibana
+      - filebeat
+
+networks:
+  elk:
+    driver: bridge
+  traefik_network:
+    external: true
+
+volumes:
+  elasticsearch-data:
